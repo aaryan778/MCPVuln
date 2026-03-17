@@ -1,0 +1,135 @@
+rules:
+  # 
+  # MCP SERVER SPECIFIC PATTERNS - High-confidence issues only
+  # 
+  # REMOVED (caused 400+ false positives):
+  # - mcp-tool-reflects-input: Every tool returns data - not a vuln
+  # - mcp-tool-no-auth-check: MCP uses external OAuth/token auth
+  # - mcp-tool-any-type-schema: Too broad, catches valid Zod schemas
+  # - mcp-error-stack-leak (taint version): Too noisy, replaced with specific pattern
+  #
+
+  # --- Error with STACK TRACE specifically returned to client ---
+  # Only flag when .stack is explicitly returned (not just error messages)
+  - id: mcp-error-stack-leak
+    patterns:
+      - pattern-either:
+          - pattern: |
+              catch ($ERR) {
+                ...
+                return { content: [{ ..., text: $ERR.stack, ... }] }
+              }
+          - pattern: |
+              catch ($ERR) {
+                ...
+                return { content: [{ ..., text: `...${$ERR.stack}...`, ... }] }
+              }
+    languages: [typescript, javascript]
+    severity: INFO
+    message: >
+      Error stack trace returned to client. This may leak internal
+      file paths and implementation details.
+    metadata:
+      cwe: CWE-209
+      category: information-disclosure
+      confidence: MEDIUM
+
+  # --- Dangerous tool names (common attack surface) ---
+  - id: mcp-dangerous-tool-name
+    patterns:
+      - pattern-either:
+          - pattern: server.tool("execute", ...)
+          - pattern: server.tool("run_command", ...)
+          - pattern: server.tool("shell", ...)
+          - pattern: server.tool("exec", ...)
+          - pattern: server.tool("eval", ...)
+          - pattern: server.tool("run_code", ...)
+          - pattern: server.tool("system", ...)
+          - pattern: server.tool("bash", ...)
+          - pattern: server.tool("cmd", ...)
+          - pattern: server.tool("powershell", ...)
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >
+      Tool with dangerous name suggests it executes arbitrary commands.
+      Ensure strict input validation and sandboxing.
+    metadata:
+      cwe: CWE-78
+      category: command-injection
+      confidence: MEDIUM
+
+  # --- Python: dangerous MCP tool names ---
+  - id: mcp-python-dangerous-tool-name
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @server.tool()
+              async def execute(...): ...
+          - pattern: |
+              @server.tool()
+              async def run_command(...): ...
+          - pattern: |
+              @server.tool()
+              async def shell(...): ...
+          - pattern: |
+              @server.tool()
+              async def exec(...): ...
+          - pattern: |
+              @mcp.tool()
+              async def execute(...): ...
+          - pattern: |
+              @mcp.tool()
+              async def run_command(...): ...
+          - pattern: |
+              @mcp.tool()
+              async def shell(...): ...
+    languages: [python]
+    severity: WARNING
+    message: >
+      MCP tool with dangerous name - ensure strict input validation.
+    metadata:
+      cwe: CWE-78
+      category: command-injection
+      confidence: MEDIUM
+
+  # --- Resource handler with user-controlled URI directly to FS ---
+  - id: mcp-resource-uri-to-fs
+    patterns:
+      - pattern-either:
+          - pattern: |
+              server.resource($NAME, $URI, async ($REQ) => {
+                ...
+                fs.readFile($REQ.params.uri, ...)
+                ...
+              })
+          - pattern: |
+              server.resource($NAME, $URI, async ($REQ) => {
+                ...
+                fs.readFileSync($REQ.params.uri, ...)
+                ...
+              })
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Resource handler passes URI directly to filesystem operation.
+      Validate and sanitize the URI before use.
+    metadata:
+      cwe: CWE-22
+      category: path-traversal
+      confidence: HIGH
+
+  # --- Tool description built from user input (real prompt injection risk) ---
+  - id: mcp-tool-description-dynamic
+    patterns:
+      - pattern-either:
+          - pattern: server.tool($NAME, `...${$VAR}...`, ...)
+          - pattern: server.tool($NAME, $A + $B, ...)
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Tool description contains dynamic content. If user-controlled,
+      this enables prompt injection via tool descriptions.
+    metadata:
+      cwe: CWE-74
+      category: prompt-injection
+      confidence: HIGH

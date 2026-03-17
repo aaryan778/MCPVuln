@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.21,<1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcpsec"
+version = "2.6.0"
+description = "Security scanner for MCP (Model Context Protocol) servers - pentest your AI agent's tool connections"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Manthan Ghasadiya", email = "manthan27ghasadiya@gmail.com"}
+]
+keywords = ["mcp", "security", "scanner", "ai", "llm", "pentest", "vulnerability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "rich>=13.0.0",
+    "typer>=0.12.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "anyio>=4.0.0",
+    "semgrep>=1.90.0",
+]
+
+[project.optional-dependencies]
+ai = [
+    "openai>=1.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+rogue = [
+    "aiohttp>=3.9.0",
+]
+exploit = [
+    "prompt_toolkit>=3.0.0",
+]
+all = [
+    "mcpsec[ai,rogue,exploit]",
+]
+
+[project.scripts]
+mcpsec = "mcpsec.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/manthanghasadiya/mcpsec"
+Documentation = "https://github.com/manthanghasadiya/mcpsec#readme"
+Repository = "https://github.com/manthanghasadiya/mcpsec"
+Issues = "https://github.com/manthanghasadiya/mcpsec/issues"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

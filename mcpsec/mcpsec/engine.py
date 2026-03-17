@@ -1,0 +1,132 @@
+"""
+Scan engine — orchestrates scanner execution.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+from mcpsec.client.mcp_client import MCPSecClient
+from mcpsec.models import ScanResult, ServerProfile, TransportType
+from mcpsec.scanners import SCANNERS
+from mcpsec.scanners.base import BaseScanner
+from mcpsec.ui import console, get_progress, print_finding, print_section, print_summary
+
+# ── Scanner Registry ─────────────────────────────────────────────────────────
+
+ALL_SCANNERS: list[BaseScanner] = [scanner_class() for scanner_class in SCANNERS.values()]
+
+SCANNER_MAP: dict[str, BaseScanner] = {s.name: s for s in ALL_SCANNERS}
+
+
+def get_scanners(names: list[str] | None = None) -> list[BaseScanner]:
+    """Get scanner instances by name, or all scanners if no names given."""
+    if not names:
+        return ALL_SCANNERS
+    return [SCANNER_MAP[n] for n in names if n in SCANNER_MAP]
+
+
+# ── Scan Engine ──────────────────────────────────────────────────────────────
+
+
+async def run_scan(
+    profile: ServerProfile,
+    client: MCPSecClient | None = None,
+    scanner_names: list[str] | None = None,
+    target: str = "",
+    transport: TransportType = TransportType.STDIO,
+) -> ScanResult:
+    """Run all selected scanners against a server profile."""
+
+    scanners = get_scanners(scanner_names)
+
+    result = ScanResult(
+        scan_id=str(uuid.uuid4())[:8],
+        target=target,
+        transport=transport,
+        server_profile=profile,
+    )
+
+    print_section("Running Scanners", "⚡")
+
+    with get_progress() as progress:
+        task = progress.add_task("Scanning...", total=len(scanners))
+
+        for scanner in scanners:
+            progress.update(task, description=f"[cyan]{scanner.name}[/cyan]")
+
+            try:
+                findings = await scanner.scan(profile, client)
+                result.findings.extend(findings)
+                result.scanners_run.append(scanner.name)
+            except Exception as e:
+                error_msg = f"Scanner '{scanner.name}' failed: {e}"
+                result.errors.append(error_msg)
+                console.print(f"  [warning]⚠ {error_msg}[/warning]")
+
+            progress.advance(task)
+
+        # Phase 5: Run MCP-specific protocol scanners (fast, no network needed)
+        try:
+            from mcpsec.scanners.annotation_integrity import scan_annotations
+            from mcpsec.scanners.description_injection import scan_descriptions
+
+            # These are instant, so we just run them
+            result.findings.extend(scan_descriptions(profile.tools))
+            result.findings.extend(scan_annotations(profile.tools))
+
+            result.scanners_run.append("description-injection")
+            result.scanners_run.append("annotation-integrity")
+
+        except Exception as e:
+            console.print(f"  [warning]⚠ Protocol scanners failed: {e}[/warning]")
+
+    # ── Deduplicate ────────────────────────────────────────────────────────
+    unique_findings = {}
+    for f in result.findings:
+        # Key: Tool + Type of vulnerability (from title/scanner)
+        # Using a fuzzy key to consolidate multiple "missing annotation" warnings
+        simple_title = f.title.lower()
+        if "missing" in simple_title and "annotation" in simple_title:
+            simple_title = "missing annotations"
+
+        key = (f.tool_name, simple_title)
+        if key not in unique_findings:
+            unique_findings[key] = f
+        else:
+            # Keep the one with higher severity or more detail
+            existing = unique_findings[key]
+            if len(f.description) > len(existing.description):
+                unique_findings[key] = f
+
+    result.findings = list(unique_findings.values())
+
+    # ── Print findings ────────────────────────────────────────────────────
+    if result.findings:
+        print_section("Findings", "🔍")
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        sorted_findings = sorted(
+            result.findings, key=lambda f: severity_order.get(f.severity.value, 5)
+        )
+        for finding in sorted_findings:
+            print_finding(
+                severity=finding.severity.value,
+                scanner=finding.scanner,
+                tool_name=finding.tool_name,
+                title=finding.title,
+                detail=finding.detail[:200] if finding.detail else "",
+            )
+
+    # ── Print summary ─────────────────────────────────────────────────────
+    print_section("Summary", "📊")
+    print_summary(
+        total=result.total_count,
+        critical=result.critical_count,
+        high=result.high_count,
+        medium=result.medium_count,
+        low=result.low_count,
+        info=result.info_count,
+    )
+
+    result.mark_complete()
+    return result
